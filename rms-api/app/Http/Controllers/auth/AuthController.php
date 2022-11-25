@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\auth;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\PasswordResetJob;
 use App\Jobs\VerifyUserJobs;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Models\User;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use Validator;
@@ -20,7 +23,7 @@ class AuthController extends Controller
      * @return void
      */
     public function __construct() {
-        $this->middleware('auth:api', ['except' => ['login', 'register','accountVerify']]);
+        $this->middleware('auth:api', ['except' => ['login', 'register','accountVerify','forgetPassword','updatePassword']]);
     }
     /**
      * Get a JWT via given credentials.
@@ -133,5 +136,64 @@ class AuthController extends Controller
             'expires_in' => auth()->factory()->getTTL() * 60,
             'user' => auth()->user()
         ]);
+    }
+
+    // forget password
+    public function forgetPassword(Request $request)
+    {
+        try{
+            $user = User::where('email',$request->email)->first();
+            if($user)
+            {
+                    $token = Str::random(15);
+                    $details = ['name' => $user->name, 'token' => $token , 'email' => $user->email, 'hashEmail' => Crypt::encryptString($user->email)];
+
+                    if(dispatch(new PasswordResetJob($details)))
+                    {
+                        DB::table('password_resets')->insert([
+                            'email' => $user->email,
+                            'token' => $token,
+                            'created_at' => now()
+                        ]);
+                        return response()->json(['status' => true,'message' => 'Password Reset link has been sent to your email address']);
+                    }
+                    else{
+                        return response()->json(['status' => false,'message' => 'Invalid Email Addredd']);
+                    }
+            }
+            else{
+
+            }
+        }
+        catch(\Throwable $th)
+        {
+            return response()->json(['status' => false,'message' => $th->getMessage()]);
+        }
+    }
+
+    // update password
+    public function updatePassword(Request $request)
+    {
+        try{
+            $email  = Crypt::decryptString($request->email);
+            // return $email;
+            $user   = DB::table('password_resets')->where([['email',$email],['token',$request->token]])->first();
+            if(!$user){
+                return response()->json(['status' => false,'message' => 'Invalid email address or token']);
+            }
+            else{
+                $data = User::where('email',$email)->first();
+                $data->update([
+                    'password' => Hash::make($request->password)
+                ]);
+                DB::table('password_resets')->where('email',$email)->delete();
+                return response()->json(['status' => true,'message' => 'Password Updated']);
+            }
+
+        }
+        catch(\Throwable $th)
+        {
+            return response()->json(['status' => false,'message' => $th->getMessage()]);
+        }
     }
 }
